@@ -1,0 +1,230 @@
+---
+title: "Untitled"
+author: "Aditya"
+date: "2025-04-25"
+output: html_document
+---
+
+##1. Loading packages: 
+```{r}
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(ranger)
+library(gbm)
+library(corrplot)
+library(pROC)
+```
+##3. Importing data
+```{r}
+loan <- read.csv("C:/Users/vivekvikrams/Downloads/loan_data_cleaned.csv")
+```
+# Checking for missing Values
+```{r}
+colSums(is.na(loan))
+```
+# structure
+```{r}
+str(loan)
+```
+#Summary Statistics
+```{r}
+summary(loan)
+```
+#Target Variable Distribution
+```{r}
+table(loan$loan_status)
+prop.table(table(loan$loan_status))
+```
+#Correlation Matrix (Numerical Only)
+```{r}
+numeric_vars <- loan[, sapply(loan, is.numeric)]
+cor_matrix <- cor(numeric_vars)
+corrplot(cor_matrix, method = "color", type = "upper", tl.cex = 0.8)
+```
+#Histograms
+```{r}
+#Distribution of Person Income
+income_cap <- quantile(loan$person_income, 0.99)
+
+ggplot(loan %>% filter(person_income <= income_cap), aes(x = person_income)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "black") +
+  scale_x_continuous(labels = function(x) format(x, big.mark = ",", scientific = FALSE)) +
+  labs(title = "Distribution of Person Income (Below 99th Percentile)", x = "Income", y = "Count")
+
+#Distribution of Interest Rate
+ggplot(loan, aes(x = loan_int_rate)) +
+  geom_histogram(bins = 100, fill = "darkgreen", color = "black") +
+  labs(title = "Distribution of Interest Rate", x = "Interest Rate", y = "Count")
+
+#Distribution of Loan Amount
+loan_cap <- quantile(loan$loan_amnt, 0.99)
+
+ggplot(loan %>% filter(loan_amnt <= loan_cap), aes(x = loan_amnt)) +
+  geom_histogram(bins = 50, fill = "orange", color = "black") +
+  labs(title = "Distribution of Loan Amount (Below 99th Percentile)", x = "Loan Amount", y = "Count")
+```
+#Boxplots by Loan Status
+```{r}
+# Cap person_income and loan_int_rate at 99th percentile
+income_cap <- quantile(loan$person_income, 0.99)
+rate_cap <- quantile(loan$loan_int_rate, 0.99)
+
+# Boxplot: Income vs Loan Status
+ggplot(loan %>% filter(person_income <= income_cap), 
+       aes(x = as.factor(loan_status), y = person_income, fill = as.factor(loan_status))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("0" = "#F8766D", "1" = "#00BFC4"), labels = c("Non-Default", "Default")) +
+  scale_y_continuous(labels = function(x) format(x, big.mark = ",", scientific = FALSE)) +
+  labs(
+    title = "Income vs Loan Status (Capped)",
+    x = "Loan Status",
+    y = "Income",
+    fill = "Loan Status"
+  )
+
+# Boxplot: Interest Rate vs Loan Status
+ggplot(loan %>% filter(loan_int_rate <= rate_cap), 
+       aes(x = as.factor(loan_status), y = loan_int_rate, fill = as.factor(loan_status))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("0" = "#F8766D", "1" = "#00BFC4"), labels = c("Non-Default", "Default")) +
+  labs(
+    title = "Interest Rate vs Loan Status (Capped)",
+    x = "Loan Status",
+    y = "Interest Rate",
+    fill = "Loan Status"
+  )
+```
+
+```{r}
+head(loan)
+nrow(loan)
+```
+
+##5. Partitioning between training, validation, and test
+```{r}
+sample <- sample.int(n = nrow(loan), size = nrow(loan)*0.7, replace = F)
+loan_training <- loan[sample, ] ##Yields training dataset
+loan_validation_test <- loan[-sample, ] ##Yields validation & test portion
+```
+```{r}
+head(loan_training)
+nrow(loan_training)
+```
+```{r}
+sample <- sample.int(n = nrow(loan_validation_test), size = nrow(loan_validation_test)*0.5, replace = F) ##Validation percentage = what percentage of this validation + test block should go into validation
+loan_VALIDATION_SET <- loan_validation_test[sample, ] ##Yields validation dataset
+loan_TEST_SET <- loan_validation_test[-sample, ] ##Yields test portion
+```
+```{r}
+head(loan_VALIDATION_SET)
+nrow(loan_VALIDATION_SET)
+```
+```{r}
+head(loan_TEST_SET)
+nrow(loan_TEST_SET)
+```
+```{r}
+loan_training$loan_status <- as.factor(loan_training$loan_status)
+loan_VALIDATION_SET$loan_status <- as.factor(loan_VALIDATION_SET$loan_status)
+loan_TEST_SET$loan_status <- as.factor(loan_TEST_SET$loan_status)
+```
+#Training a Random Forest
+```{r}
+rf_fit <- train(
+  loan_status ~ . - person_gender - person_education - person_home_ownership - loan_intent - previous_loan_defaults_on_file,
+  data = loan_training,
+  method = "ranger"
+)
+rf_fit
+```
+```{r}
+rf_validation_predictions <- predict(rf_fit, loan_VALIDATION_SET)
+confusionMatrix(rf_validation_predictions, loan_VALIDATION_SET$loan_status,positive="1") ##Random forest validation predictions 
+```
+
+```{r}
+rf_test_predictions <- predict(rf_fit, loan_TEST_SET)
+
+# Confusion Matrix
+confusionMatrix(rf_test_predictions, loan_TEST_SET$loan_status,positive="1")
+```
+```{r}
+loan_training$loan_status <- as.factor(loan_training$loan_status)
+loan_VALIDATION_SET$loan_status <- as.factor(loan_VALIDATION_SET$loan_status)
+loan_TEST_SET$loan_status <-as.factor(loan_TEST_SET$loan_status)
+```
+# Removing Zero-variance predictors
+```{r}
+nzv <- nearZeroVar(loan_training, saveMetrics = TRUE)
+loan_training <- loan_training[, !nzv$zeroVar]
+```
+# Training a Gradient Boosting Machine model
+```{r}
+set.seed(123)
+gbm_fit <- train(loan_status ~ ., data = loan_training, method = "gbm", trControl = trainControl(method = "cv", number = 5), verbose = FALSE)
+```
+
+# Model Summary
+```{r}
+print(gbm_fit)
+```
+# Prediction on Validation Set
+```{r}
+gbm_pred <- predict(gbm_fit, newdata = loan_VALIDATION_SET)
+```
+#Confusion Matrix
+```{r}
+confusionMatrix(gbm_pred, as.factor(loan_VALIDATION_SET$loan_status))
+```
+```{r}
+# Normalize the data (excluding the target variable)
+preprocess_params <- preProcess(loan_training[, -which(names(loan_training) == "loan_status")], method = c("center", "scale"))
+
+# Apply normalization to the predictors
+loan_training_norm <- predict(preprocess_params, loan_training)
+
+# Ensure the target variable is correctly retained
+loan_training_norm$loan_status <- loan_training$loan_status
+```
+```{r}
+# Apply same transformation to test set
+loan_TEST_SET_norm <- predict(preprocess_params, loan_TEST_SET)
+loan_TEST_SET_norm$loan_status <- loan_TEST_SET$loan_status
+```
+#KNN
+```{r}
+ctrl <- trainControl(method = "repeatedcv", repeats = 3)
+knn_fit <- train(
+  loan_status ~ . - person_gender - person_education - person_home_ownership - loan_intent - previous_loan_defaults_on_file,
+  data = loan_training_norm,
+  method = "knn",
+  trControl = ctrl,
+  tuneLength = 20
+)
+knn_fit
+plot(knn_fit)
+```
+#AUC Curve for KNN
+```{r}
+knn_test_predictions <- predict(knn_fit, newdata = loan_TEST_SET_norm)
+confusionMatrix(knn_test_predictions, loan_TEST_SET_norm$loan_status, positive = "1")
+
+test_probs <- predict(knn_fit, newdata = loan_TEST_SET_norm, type = "prob")[,2]
+roc_test <- roc(loan_TEST_SET_norm$loan_status, test_probs)
+plot(roc_test, main = "ROC Curve - Test Set (KNN)")
+auc(roc_test)
+
+```
+
+#AUC curve for Gradient Boosting Machine
+```{r}
+# Predict probabilities for the positive class on the test set
+gbm_test_probs <- predict(gbm_fit, newdata = loan_TEST_SET, type = "prob")[, 2]
+
+# Compute and plot ROC
+gbm_roc <- roc(loan_TEST_SET$loan_status, gbm_test_probs)
+plot(gbm_roc, main = "ROC Curve - GBM", col = "darkgreen", lwd = 2)
+auc(gbm_roc)
+```
+
